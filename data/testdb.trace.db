@@ -1,0 +1,9 @@
+2024-12-15 04:29:09.039544+09:00 jdbc[13]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "POINTHISTORY" not found; SQL statement:
+select * from pointHistory [42102-232]
+2024-12-15 05:40:26.322214+09:00 jdbc[13]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "POINTL" not found; SQL statement:
+select * from pointl [42102-232]
+2024-12-15 05:40:34.174638+09:00 jdbc[13]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "POINT_HISTORYL" not found; SQL statement:
+select * from point_historyl [42102-232]

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8" />
+</head>
+<body>
+<h2>결제 성공</h2>
+<p id="paymentKey" th:text="'paymentKey: ' + ${paymentKey}"></p>
+<p id="orderId" th:text="'주문번호: ' + ${orderId}"></p>
+<p id="amount" th:text="'결제 금액: ' + ${amount}"></p>
+
+<script th:inline="javascript">
+    const paymentKey = [[${paymentKey}]];
+    const orderId = [[${orderId}]];
+    const amount = [[${amount}]];
+    const userId = orderId.split('_')[1];
+
+    async function confirm() {
+        const requestData = {
+            paymentKey: paymentKey,
+            orderId: orderId,
+            amount: amount,
+            userId: userId
+        };
+
+        const response = await fetch("/payment/confirm", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(requestData),
+        });
+
+        const json = await response.json();
+
+        if (!response.ok) {
+            console.log(json);
+            const encodedMessage = encodeURIComponent(json.message);
+            const encodedCode = encodeURIComponent(json.code);
+            window.location.href = `/fail?message=${encodedMessage}&code=${encodedCode}`;
+        }
+
+        console.log(json);
+    }
+    confirm();
+</script>
+</body>
+</html>

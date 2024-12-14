@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8" />
+    <script src="https://js.tosspayments.com/v2/standard"></script>
+    <style>
+        .amount-options {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .amount-box {
+            border: 2px solid #ddd;
+            padding: 16px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .amount-box:hover {
+            border-color: #0064FF;
+        }
+
+        .amount-box.selected {
+            border-color: #0064FF;
+            background-color: #F5F8FF;
+        }
+    </style>
+</head>
+<body>
+<!-- 금액 선택 UI -->
+<div class="amount-options">
+    <div class="amount-box" data-amount="100">100원</div>
+    <div class="amount-box" data-amount="3000">3,000원</div>
+    <div class="amount-box" data-amount="5000">5,000원</div>
+    <div class="amount-box" data-amount="10000">10,000원</div>
+</div>
+
+<!-- 결제 UI -->
+<div id="payment-method"></div>
+<!-- 이용약관 UI -->
+<div id="agreement"></div>
+<!-- 결제하기 버튼 -->
+<button class="button" id="payment-button" style="margin-top: 30px">결제하기</button>
+
+<script th:inline="javascript">
+    main();
+
+    function generateOrderId(userId) {
+        const timestamp = new Date().getTime();
+        const randomStr = Math.random().toString(36).substring(2, 8);
+        return `ORDER_${userId}_${timestamp}_${randomStr}`; // userId 포함
+    }
+
+
+    async function main() {
+
+        // URL 파라미터에서 userId 추출
+        const userId = [[${userId}]];  // Thymeleaf를 통해 전달된 userId
+        const clientKey = [[${clientKey}]];  // Thymeleaf를 통해 전달된 clientKey
+
+        const button = document.getElementById("payment-button");
+        const amountBoxes = document.querySelectorAll('.amount-box');
+        let selectedAmount = 100; // 초기값 설정
+
+        // ------  결제위젯 초기화 ------
+        const tossPayments = TossPayments(clientKey);
+        // 회원 결제
+        const customerKey = "isCKnaz56CQL4tOo_ML3H";
+        const widgets = tossPayments.widgets({
+            customerKey,
+        });
+
+        // ------ 주문의 결제 금액 설정 ------
+        await widgets.setAmount({
+            currency: "KRW",
+            value: selectedAmount,
+        });
+
+        // 초기 선택 표시
+        amountBoxes[0].classList.add('selected');
+
+        await Promise.all([
+            // ------  결제 UI 렌더링 ------
+            widgets.renderPaymentMethods({
+                selector: "#payment-method",
+                variantKey: "DEFAULT",
+            }),
+            // ------  이용약관 UI 렌더링 ------
+            widgets.renderAgreement({ selector: "#agreement", variantKey: "AGREEMENT" }),
+        ]);
+
+        // 금액 선택 UI 이벤트 처리
+        amountBoxes.forEach(box => {
+            box.addEventListener('click', async function() {
+                // 이전 선택 제거
+                amountBoxes.forEach(b => b.classList.remove('selected'));
+                // 현재 선택 표시
+                this.classList.add('selected');
+                // 선택된 금액 저장
+                selectedAmount = parseInt(this.dataset.amount);
+                // 금액 설정
+                await widgets.setAmount({
+                    currency: "KRW",
+                    value: selectedAmount,
+                });
+            });
+        });
+
+        // ------ '결제하기' 버튼 누르면 결제창 띄우기 ------
+        button.addEventListener("click", async function () {
+            if (selectedAmount === 0) {
+                alert('결제 금액을 선택해주세요.');
+                return;
+            }
+
+            const orderId = generateOrderId(userId); // userId 전달
+            console.log("Generated orderId:", orderId);
+
+            await widgets.requestPayment({
+                orderId: orderId,
+                orderName: "포인트 충전: " + selectedAmount,
+                successUrl: window.location.origin + "/point-charge-success",
+                failUrl: window.location.origin + "/fail.html",
+                customerEmail: "customer123@gmail.com",
+                customerName: "김토스",
+                customerMobilePhone: "01012341234",
+            });
+        });
+    }
+</script>
+</body>
+</html>
