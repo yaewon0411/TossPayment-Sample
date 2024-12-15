@@ -3,6 +3,7 @@ package com.my.tosspaymenttest.web.api.payment.dto;
 import com.my.tosspaymenttest.client.dto.TossPaymentRespDto;
 import com.my.tosspaymenttest.web.domain.pointHistory.PointHistory;
 import com.my.tosspaymenttest.web.domain.pointHistory.PointTransactionType;
+import com.my.tosspaymenttest.web.service.payment.PaymentService;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 

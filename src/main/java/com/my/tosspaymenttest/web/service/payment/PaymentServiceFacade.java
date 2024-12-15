@@ -3,22 +3,23 @@ package com.my.tosspaymenttest.web.service.payment;
 import com.my.tosspaymenttest.client.TossPaymentClient;
 import com.my.tosspaymenttest.client.dto.TossPaymentReqDto;
 import com.my.tosspaymenttest.client.dto.TossPaymentRespDto;
+import com.my.tosspaymenttest.client.ex.badRequest.TossPaymentBadRequestException;
 import com.my.tosspaymenttest.web.api.payment.dto.PaymentReqDto;
 import com.my.tosspaymenttest.web.api.payment.dto.PaymentRespDto;
 import com.my.tosspaymenttest.web.domain.payment.Payment;
 import com.my.tosspaymenttest.web.domain.point.Point;
 import com.my.tosspaymenttest.web.domain.pointHistory.PointHistory;
 import com.my.tosspaymenttest.web.domain.user.User;
-import com.my.tosspaymenttest.web.ex.PaymentCancellationException;
-import com.my.tosspaymenttest.web.ex.PaymentConfirmException;
-import com.my.tosspaymenttest.web.ex.PointChargeException;
-import com.my.tosspaymenttest.web.ex.PointHistoryException;
+import com.my.tosspaymenttest.web.ex.*;
 import com.my.tosspaymenttest.web.service.AlertService;
 import com.my.tosspaymenttest.web.service.MetricService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
 
 @Service
 @RequiredArgsConstructor
@@ -31,42 +32,48 @@ public class PaymentServiceFacade {
     private final AlertService alertService;
     private final MetricService metricService;
 
-
-
     @Transactional(readOnly = true)
     public PaymentRespDto processPayment(PaymentReqDto paymentReqDto){
-        User user = paymentService.validateUserAndPayment(paymentReqDto);
-        TossPaymentRespDto tossPaymentRespDto = requestPaymentConfirm(paymentReqDto, user);
 
-        // 결제 정보 저장 -> 별도 트랜잭션
-        Payment payment = paymentService.savePaymentInfo(paymentReqDto, tossPaymentRespDto, user);
+        try {
+            MDC.put("merchantUid", paymentReqDto.getOrderId());
+            MDC.put("paymentKey", paymentReqDto.getPaymentKey());
+            log.info("결제 처리 시작");
 
-        try{
-            //포인트 충전 -> 별도 트랜잭션
-            Point point = paymentService.chargePoint(user, payment, paymentReqDto);
-            try{
-                //포인트 충전 내역 저장 -> 별도 트랜잭션
-                PointHistory pointHistory = paymentService.savePointHistory(point);
-                return new PaymentRespDto(pointHistory);
-            }catch (PointHistoryException e){
-                handleFailedPointHistorySave(point, e);
+            User user = paymentService.validateUserAndPayment(paymentReqDto);
+            TossPaymentRespDto tossPaymentRespDto = requestPaymentConfirm(paymentReqDto, user);
+            Payment payment = paymentService.savePaymentInfo(paymentReqDto, tossPaymentRespDto, user);
 
-                //실패한 포인트 충전 내역 로그 저장 -> 별도 트랜잭션
-                try {
-                    paymentService.saveFailedPointHistoryLog(point, e);
-                } catch(Exception logSaveFailException){//이 경우 로깅만 하고 넘어가되 모니터링은 필요함
-                    handleFailedLogSave(point, logSaveFailException);
-                }
-                throw e;
-            }
-        }catch (PointChargeException e){
-            rollbackPointCharge(payment, paymentReqDto, user, e);
             try {
-                metricService.recordFailedCharge(user.getId(), payment.getId());
-            }catch(Exception metricSaveException){
-                log.error("메트릭 수집 실패: {}", metricSaveException.getMessage(), metricSaveException);
+                PointHistory pointHistory = paymentService.chargePointWithHistory(user, payment);
+                return new PaymentRespDto(pointHistory);
+            } catch (Exception e) {
+                rollbackPointCharge(payment, paymentReqDto, user, e);
+                recordMetric(user, payment);
+
+                if (e instanceof PointChargeException) {
+                    throw e;
+                }
+
+                log.error("[시스템 오류] 포인트 충전 중 예상치 못한 오류 발생: {}", e.getMessage(), e);
+                throw new PaymentSystemException("시스템 오류로 인한 결제 실패", e);
             }
+        } catch (PaymentValidationException | PaymentConfirmException | PointChargeException | PaymentSystemException e) {
             throw e;
+        } catch (Exception e) {
+            log.error("결제 처리 중 예상치 못한 오류 발생: {}", e.getMessage(), e);
+            throw new PaymentSystemException("결제 처리 실패", e);
+        } finally {
+            MDC.remove("merchantUid");
+            MDC.remove("paymentKey");
+        }
+    }
+
+    private void recordMetric(User user, Payment payment) {
+        try {
+            metricService.recordFailedCharge(user.getId(), payment.getId());
+        } catch (Exception metricSaveException) {
+            log.error("메트릭 수집 실패: {}", metricSaveException.getMessage(), metricSaveException);
         }
     }
 
@@ -79,50 +86,66 @@ public class PaymentServiceFacade {
                             paymentReqDto.getPaymentKey()
                     ));
         } catch (Exception e){
-            log.error("토스 결제 승인 실패: {}", e.getMessage(), e);
             alertService.sendAlert("결제 승인 실패", String.format("userId=%d, orderId=%s", user.getId(), paymentReqDto.getOrderId()));
             throw new PaymentConfirmException("결제 승인 실패", e);
         }
     }
 
-    private void handleFailedPointHistorySave(Point point, PointHistoryException e){
-        log.error("포인트 충전 이력 저장 실패. 재시도 큐에 등록됨. pointId = {}", point.getId());
-        alertService.sendAlert("포인트 충전 이력 저장 실패",
-                String.format("userId=%d, pointId=%d", point.getUser().getId(), point.getId()));
-    }
-
-    private void handleFailedLogSave(Point point, Exception e) {
-        log.error("실패한 포인트 이력 로그 저장에 실패: {}",e.getMessage(), e);
-        alertService.sendAlert("실패한 포인트 이력 로그 저장 실패",
-                String.format("userId=%d, pointId=%d, error=%s",
-                        point.getUser().getId(),
-                        point.getId(),
-                        e.getMessage()
-                )
-        );
-        metricService.recordFailedLogSave(point.getId());
-    }
-
-    private void rollbackPointCharge(Payment payment, PaymentReqDto paymentReqDto, User user, Exception e) {
+    private void rollbackPointCharge(Payment payment, PaymentReqDto paymentReqDto, User user, Exception originalError) {
         try {
-            handlePaymentCancellation(payment, paymentReqDto, user, e);
+            handlePaymentCancellation(payment, paymentReqDto, user, originalError);
+        } catch (TossPaymentBadRequestException | CanceledPaymentException e) {
+            throw e;
         } catch (Exception cancelException) {
-            log.error("[긴급] Payment 롤백 실패: {}",cancelException.getMessage(), cancelException);
-            //이 때는 수동 개입이 필요한 상황이므로 긴급 알람을 보낸다
-            alertService.sendEmergencyAlert("Payment rollback failed",
-                    String.format("Payment: %s, User: %s", payment.getId(), user.getId()));
-            metricService.recordFailedCharge(user.getId(), payment.getId());
+            log.error("[긴급] Payment 롤백 실패: {}", cancelException.getMessage(), cancelException);
+            alertService.sendEmergencyAlert(
+                    "[긴급] Payment 롤백 실패",
+                    formatAlertMessage(payment, user, originalError, cancelException)
+            );
+        } finally {
+            recordMetric(user, payment);
         }
     }
 
-    private void handlePaymentCancellation(Payment payment, PaymentReqDto paymentReqDto, User user, Exception e){
-        TossPaymentRespDto canceledPaymentInfo =
-                paymentService.cancelPaymentAndThrowWhenFailToUpdatePoint(paymentReqDto, user, e);
+    private String formatAlertMessage(Payment payment, User user, Exception originalError, Exception cancelError) {
+        return String.format("""
+                    시간: %s
+                    Payment ID: %d
+                    사용자ID: %d
+                    최초에러: %s
+                    취소실패원인: %s
+                    """,
+                LocalDateTime.now(),
+                payment.getId(),
+                user.getId(),
+                originalError.getMessage(),
+                cancelError.getMessage()
+        );
+    }
+
+    private void handlePaymentCancellation(Payment payment, PaymentReqDto paymentReqDto, User user, Exception originalError) {
         try {
-            paymentService.updatePaymentStatus(payment, canceledPaymentInfo);
-        } catch(Exception updateFailException){
-            log.error("결제 취소 상태 업데이트 실패: {}",updateFailException.getMessage(), updateFailException);
-            String message = String.format("결제 취소 상태 업데이트 실패 - payment: %s, user: %s", payment.getId(), user.getId());
+            TossPaymentRespDto canceledPaymentInfo =
+                    paymentService.cancelPaymentAndThrowWhenFailToUpdatePoint(paymentReqDto, user, originalError);
+            paymentService.updatePaymentStatusToCanceled(payment, canceledPaymentInfo);
+            log.info("결제 취소 처리 완료 - paymentId: {}", payment.getId());
+        } catch (TossPaymentBadRequestException e) {
+            log.warn("결제 취소 중 예측된 실패 발생: {}", e.getMessage());
+            alertService.sendAlert("결제 취소 중 예측된 실패",
+                    formatAlertMessage(payment, user, originalError, e));
+            throw e;
+        } catch (CanceledPaymentException e) {
+            log.error("[긴급] 결제 취소 상태 검증 실패: {}", e.getMessage());
+            alertService.sendEmergencyAlert(
+                    "[긴급] 결제 취소 상태 검증 실패",
+                    formatAlertMessage(payment, user, originalError, e));
+            throw e;
+        } catch (Exception updateFailException) {
+            log.error("결제 취소 상태 DB 반영 실패: {}", updateFailException.getMessage(), updateFailException);
+            String message = String.format(
+                    "수동 확인 필요 - 토스 결제는 취소되었으나 DB 반영 실패. paymentId: %s, userId: %s",
+                    payment.getId(), user.getId()
+            );
             throw new PaymentCancellationException(message, updateFailException);
         }
     }

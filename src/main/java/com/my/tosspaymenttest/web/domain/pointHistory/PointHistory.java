@@ -27,6 +27,14 @@ public class PointHistory extends BaseEntity {
     @Enumerated(EnumType.STRING)
     private PointTransactionType pointTransactionType;
 
+    public static PointHistory createChargeHistory(Point point){
+        return PointHistory.builder()
+                .point(point)
+                .pointTransactionType(PointTransactionType.CHARGE)
+                .amount(point.getAmount())
+                .build();
+    }
+
     @Builder
     public PointHistory(Long id, Point point, Integer amount, PointTransactionType pointTransactionType) {
         this.id = id;

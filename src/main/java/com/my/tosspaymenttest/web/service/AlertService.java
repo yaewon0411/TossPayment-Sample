@@ -10,7 +10,7 @@ public class AlertService {
 
     }
 
-    public void sendEmergencyAlert(String message, String detailedLog){
+    public void sendEmergencyAlert(String title, String detailedLog){
 
     }
 }

@@ -122,7 +122,7 @@ public class TossPaymentClient {
 
     private void handlePaymentException(PaymentFeature feature, String paymentKey, Exception e) {
         if (e instanceof TossPaymentException) {
-            log.error(ERROR_LOG_FORMAT.formatted(feature.getDescription()), paymentKey, ((TossPaymentException) e).getErrorCode().getMessage(), e);
+            log.warn(ERROR_LOG_FORMAT.formatted(feature.getDescription()), paymentKey, ((TossPaymentException) e).getErrorCode().getMessage(), e);
             throw (TossPaymentException) e;
         }
         log.error(SYSTEM_ERROR_LOG_FORMAT.formatted(feature.getDescription()), paymentKey, e);
@@ -130,7 +130,6 @@ public class TossPaymentClient {
     }
 
     private void handleError(String paymentKey, ClientHttpResponse errorResponse, TossPaymentErrorCode errorCode) throws IOException {
-        log.warn("토스페이먼츠 에러 발생: {}", errorCode.getMessage());
         switch(errorResponse.getStatusCode().value()){
             case 400 -> throw new TossPaymentBadRequestException(errorCode, paymentKey);
             case 401 -> throw new TossPaymentUnauthorizedException(errorCode, paymentKey);

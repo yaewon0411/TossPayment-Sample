@@ -33,4 +33,11 @@ public class PaymentViewController {
         model.addAttribute("amount", amount);
         return "point-charge-success";
     }
+
+    @GetMapping("/fail")
+    public String showFailPage(
+            @RequestParam(required = false) String message,
+            @RequestParam(required = false) String code) {
+        return "point-charge-fail";
+    }
 }

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- 일반 로그 패턴 -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level [REQ:%X{requestId}] [%X{method} %X{uri}] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 결제 로그 패턴 -->
+    <appender name="PAYMENT_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level [REQ:%X{requestId}] [%X{method} %X{uri}] [MID:%X{merchantUid}] [KEY:%X{paymentKey}] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 결제 서비스 로그 설정 -->
+    <logger name="com.my.tosspaymenttest.web.service.payment" level="INFO" additivity="false">
+        <appender-ref ref="PAYMENT_CONSOLE"/>
+    </logger>
+
+    <!-- Root Logger -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

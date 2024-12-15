@@ -24,11 +24,8 @@ public class Point extends BaseEntity {
     @JoinColumn(name = "user_id")
     private User user;
 
-    public void charge(Integer amount) throws Exception {
+    public void charge(Integer amount){
         this.amount += amount;
-        //TODO 테스트!!!!!!!!!!!!! 제거할 것============================================
-        throw new Exception("포인트 충전 중 예기치 못한 오류 발생함");
-        //TODO=======================================================================
     }
 
 

@@ -2,30 +2,31 @@ package com.my.tosspaymenttest.web.service.payment;
 
 import com.my.tosspaymenttest.client.TossPaymentClient;
 import com.my.tosspaymenttest.client.dto.TossPaymentCancelReqDto;
-import com.my.tosspaymenttest.client.dto.TossPaymentReqDto;
 import com.my.tosspaymenttest.client.dto.TossPaymentRespDto;
 import com.my.tosspaymenttest.web.api.payment.dto.PaymentReqDto;
-import com.my.tosspaymenttest.web.api.payment.dto.PaymentRespDto;
 import com.my.tosspaymenttest.web.domain.payment.Payment;
 import com.my.tosspaymenttest.web.domain.payment.PaymentCancelReason;
 import com.my.tosspaymenttest.web.domain.payment.PaymentRepository;
 import com.my.tosspaymenttest.web.domain.payment.PaymentType;
 import com.my.tosspaymenttest.web.domain.point.Point;
 import com.my.tosspaymenttest.web.domain.point.PointRepository;
-import com.my.tosspaymenttest.web.domain.pointHistory.FailedPointHistoryLog;
 import com.my.tosspaymenttest.web.domain.pointHistory.PointHistory;
-import com.my.tosspaymenttest.web.domain.pointHistory.PointTransactionType;
 import com.my.tosspaymenttest.web.domain.pointHistory.repository.FailedPointHistoryLogRepository;
+import com.my.tosspaymenttest.web.domain.pointHistory.repository.PointHistoryRepository;
 import com.my.tosspaymenttest.web.domain.user.User;
 import com.my.tosspaymenttest.web.domain.user.UserRepository;
 import com.my.tosspaymenttest.web.ex.*;
 import com.my.tosspaymenttest.web.service.AlertService;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -38,68 +39,35 @@ public class PaymentService {
     private final UserRepository userRepository;
     private final PointRepository pointRepository;
     private final PaymentRepository paymentRepository;
-    private final FailedPointHistoryLogRepository failedPointHistoryLogRepository;
+    private final PointHistoryRepository pointHistoryRepository;
     private final AlertService alertService;
     private static final String PAYMENT_CANCEL_SUCCESS_STATE = "DONE";
 
-    //TODO: 재시도 메커니즘 구현 예정
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
-    public PointHistory savePointHistory(Point point){
-        try{
-            PointHistory pointHistory = PointHistory.builder()
-                    .point(point)
-                    .pointTransactionType(PointTransactionType.CHARGE)
-                    .amount(point.getAmount())
-                    .build();
-            log.info("포인트 충전 내역 생성 완료. userId = {}, pointHistoryId = {}", point.getUser().getId(), pointHistory.getId());
-            return pointHistory;
-        }catch (Exception e){
-            log.error("[포인트 충전 내역 저장 중 오류 발생] cause = {}, userId = {}",e.getMessage(), point.getUser().getId());
-
-            //TODO 비동기로 재시도 큐에 등록. 구현할 것
-
-
-            //예외는 던지되 메인 트랜잭션은 커밋되도록 한다
-            throw new PointHistoryException("포인트 충전 이력 저장 실패. 추후 재시도 예정", e);
-
-        }
-    }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void saveFailedPointHistoryLog(Point point, Exception e){
-        FailedPointHistoryLog failedPointHistoryLog = FailedPointHistoryLog.builder()
-                .pointId(point.getId())
-                .userId(point.getUser().getId())
-                .amount(point.getAmount())
-                .errorMessage(e.getMessage())
-                .build();
-        failedPointHistoryLogRepository.save(failedPointHistoryLog);
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public Point chargePoint(User user, Payment payment, PaymentReqDto paymentReqDto){
+    public PointHistory chargePointWithHistory(User user, Payment payment){
         try {
             Point point = getOrCreatePoint(user);
             point.charge(payment.getAmount());
+            PointHistory pointHistory = pointHistoryRepository.save(PointHistory.createChargeHistory(point));
 
-            log.info("포인트 충전 완료. userId = {}, pointId = {}", user.getId(), point.getId());
-            return point;
-        }catch (Exception e){
-            log.error("[포인트 충전 중 오류 발생] cause = {}, userId = {}", e.getMessage(), user.getId());
-            throw new PointChargeException("포인트 충전 실패", e);
+            throw new Exception("포인트 충전 중 어쩌고 오류 발견!!!!!!");
+
+//            log.info("포인트 충전 및 이력 생성 완료. userId = {}, pointId = {}", user.getId(), point.getId());
+//            return pointHistory;
+        } catch (Exception e) {
+            log.error("[포인트 충전 프로세스 실패] cause = {}, userId = {}", e.getMessage(), user.getId());
+            throw new PointChargeException("포인트 충전 프로세스 실패", e);
         }
     }
 
-
     //payment 상태를 취소로 바꾸고 취소 사유를 기재한다
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void updatePaymentStatus(Payment payment, TossPaymentRespDto canceledPaymentInfo) {
+    public void updatePaymentStatusToCanceled(Payment payment, TossPaymentRespDto canceledPaymentInfo) {
         try {
             payment.updateFailInfo(
                     PaymentCancelReason.SERVER_ERROR_FAIL_TO_UPDATE_POINT.getMessage(),
-                    canceledPaymentInfo.getStatus()
-            );
+                    canceledPaymentInfo.getStatus());
         }catch(Exception e){
             log.error("[결제 내역 취소 상태로 변경 중 오류 발생] cause = {}, paymentId = {}, paymentKey = {}", e.getMessage(), payment.getId(), canceledPaymentInfo.getPaymentKey());
             throw e;
@@ -109,11 +77,13 @@ public class PaymentService {
 
     public Point getOrCreatePoint(User user){
         return pointRepository.findByUser(user)
-                .orElseGet(() -> Point.builder()
-                        .user(user)
-                        .amount(0)
-                        .build()
-                );
+                .orElseGet(() -> {
+                    Point newPoint = Point.builder()
+                            .user(user)
+                            .amount(0)
+                            .build();
+                    return pointRepository.save(newPoint);
+                });
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -127,10 +97,44 @@ public class PaymentService {
             return payment;
         }catch(Exception e){
             log.error("[결제 내역 저장 중 오류 발생] cause = {}, userId = {}", e.getMessage(), user.getId());
+            try {
+                log.info("결제 취소 프로세스 시작");
+                cancelPaymentAndThrowWhenFailToSavePayment(paymentReqDto, user, e);
+                log.info("결제 취소 프로세스 완료 - 토스 결제 취소 및 상태 업데이트 성공");
+            } catch (Exception cancelException) {
+                log.error("[심각] 결제 취소 실패 - 수동 개입 필요. 원인: {}", cancelException.getMessage());
+                sendPaymentCancelFailureAlert(paymentReqDto, user, e, cancelException);
+            }
             cancelPaymentAndThrowWhenFailToSavePayment(paymentReqDto, user, e);
             throw new PaymentSaveException("결제 정보 저장 실패", e);
         }
     }
+
+    private void sendPaymentCancelFailureAlert(PaymentReqDto paymentReqDto, User user, Exception originalError, Exception cancelError) {
+        String title = String.format("[긴급] 결제 취소 실패 - merchantUid: %s", paymentReqDto.getOrderId());
+        String detailedLog = String.format("""
+                    결제 취소 실패 - 수동 개입 필요
+                    시간: %s
+                    주문번호: %s
+                    결제키: %s
+                    사용자 ID: %d
+                    결제금액: %d
+                    최초에러: %s
+                    취소실패원인: %s
+                    """,
+                LocalDateTime.now(),
+                paymentReqDto.getOrderId(),
+                paymentReqDto.getPaymentKey(),
+                user.getId(),
+                paymentReqDto.getAmount(),
+                originalError.getMessage(),
+                cancelError.getMessage()
+        );
+        alertService.sendEmergencyAlert(title, detailedLog);
+    }
+
+
+
 
     public TossPaymentRespDto cancelPaymentAndThrowWhenFailToUpdatePoint(PaymentReqDto paymentReqDto, User user, Exception e){
         //토스페이먼츠 결제 취소 요청
@@ -181,22 +185,7 @@ public class PaymentService {
         String cancelStatus = canceledPaymentInfo.getCancels().stream()
                 .findFirst()
                 .map(TossPaymentRespDto.Cancels::getCancelStatus)
-                .orElseThrow(() -> new CanceledPaymentException("취소 정보가 없습니다", e));
-        if(!cancelStatus.equals(PAYMENT_CANCEL_SUCCESS_STATE)) {
-            log.error("check 2: [토스페이먼츠 결제 취소 실패] paymentKey={}, orderId={}, totalAmount={}, status = {} ",
-                    canceledPaymentInfo.getPaymentKey(),
-                    canceledPaymentInfo.getOrderId(),
-                    canceledPaymentInfo.getTotalAmount(),
-                    cancelStatus
-            );
-            String errorMessage = String.format("결제 취소 double checking에서 불일치 발생: userId = %d, paymentKey = %s, orderId = %s, status = %s",
-                    user.getId(),
-                    canceledPaymentInfo.getPaymentKey(),
-                    canceledPaymentInfo.getOrderId(),
-                    cancelStatus
-            );
-            throw new CanceledPaymentException(errorMessage, e);
-        }
+                .orElseThrow(() -> new CanceledPaymentException("정의되지 않은 취소 상태가 확인되었습니다", e));
     }
 
 
